@@ -8,9 +8,10 @@ from PIL import Image, ImageDraw, ImageFont
 import RPi.GPIO as GPIO
 
 #other stuff
-import csv
+import gpxpy
 import time
 import serial
+import os
 from datetime import datetime, date
 
 #initialize display
@@ -75,6 +76,7 @@ def display_activity():
     image = Image.new("1", display.size)
     draw = ImageDraw.Draw(image)
     now = datetime.now()
+
     if not activity:
         draw.text((0,0), "No current activity running", font=font, fill=255)
     else:
@@ -88,9 +90,11 @@ screen_index = 0
 screen_count = 4
 activity = False
 
+last_log_time = 0
+log_interval = 1.0 
+
 
 while True:
-
     if GPIO.input(21) == GPIO.LOW:
         screen_index = (screen_index + 1) % screen_count
         time.sleep(0.3)
@@ -99,13 +103,44 @@ while True:
             time.sleep(0.01)
 
     if GPIO.input(17) == GPIO.LOW:
-        activity = True
-        activity_start = datetime.now()
+        press_start = time.time()
         time.sleep(0.3)
 
         while GPIO.input(17) == GPIO.LOW:
             time.sleep(0.01)
 
+        press_duration = time.time() - press_start
+
+        if press_duration > 2:
+            if activity:
+                activity = False
+                os.makedirs("gpx_logs", exist_ok = True)
+                filename = "gpx_logs/activity_{}.gpx".format(datetime.now().strftime("%Y%m%d_%H%M%S"))
+                with open(filename, "w") as f:
+                    f.write(gpx.to_xml())
+                    print(f"Saved GPX to {filename}")
+        else:
+            activity = True
+            activity_start = datetime.now()
+            #create gpx file for logging
+            gpx = gpxpy.gpx.GPX()
+            gpx_track = gpxpy.gpx.GPXTrack()
+            gpx.tracks.append(gpx_track)
+            gpx_segment = gpxpy.gpx.GPXTrackSegment()
+            gpx_track.segments.append(gpx_segment)
+ 
+    gps_mod.update()
+    if activity and gps_mod.has_fix:
+        now = time.time()
+        if now - last_log_time > log_interval:
+            lat, lon = gps_mod.latitude, gps_mod.longitude
+            elev = gps_mod.altitude_m
+            point = gpxpy.gpx.GPXTrackPoint(lat, lon, elevation=elev, time=datetime.now())
+            gpx_segment.points.append(point)
+            last_log_time = now
+
+
+        
     if screen_index == 1:
         environment()
     elif screen_index == 2:
