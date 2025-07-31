@@ -6,8 +6,8 @@ __pycache__/
 # C extensions
 *.so
 
-#CSV
-*.csv
+#gpx_data
+gpx_logs/
 
 # Distribution / packaging
 .Python
