@@ -1,0 +1,9 @@
+smbus2
+bme280
+adafruit_gps
+luma.oled
+RPi.GPIO
+csv
+time
+datetime
+gpxpy
