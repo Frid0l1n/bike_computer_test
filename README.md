@@ -17,13 +17,24 @@ This project aims to create a simple open source bike computer similar to the mo
 5. Have fun
 
 ## Hardware used
-I will post a table with all the hardware and the prices for each component in the next few days
+
+| Part | Cost |
+| ----------- |
+|[RPI-Zero](https://eu.mouser.com/ProductDetail/358-SC0065) | 12.95 CHF |
+|[PIM448 Motion Sensor](https://eu.mouser.com/ProductDetail/397-PIM448) | 14.95 CHF |
+|[BME280](https://eu.mouser.com/ProductDetail/Pimoroni/PIM472?qs=P1JMDcb91o7p2TYl00AP7g%3D%3D) | 13.8 CHF |
+|[I2C Display Oled 0.96"](https://eu.mouser.com/ProductDetail/Soldered/333099?qs=sGAEpiMZZMu3sxpa5v1qrkxCKRcLLrCR550%252BadnWsO8%3D) | 12.05 CHF |
+|[B3F-4130 Button](https://eu.mouser.com/ProductDetail/653-B3F-4150) | 0.55 CHF / per piece |
+|[Bread Board](https://eu.mouser.com/ProductDetail/BusBoard-Prototype-Systems/BB830T?qs=VEfmQw3KOauXY1NKV2FuEg%3D%3D) | 8 - 10 CHF |
+
+Resulting in a total price of around 66 CHF
+ 
 ## Required Packages
 
 ```
 smbus2
 bme280
-adafruit\_gps
+adafruit_gps
 luma.oled
 RPi.GPIO
 csv
