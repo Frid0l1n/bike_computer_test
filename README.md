@@ -20,7 +20,7 @@ This project aims to create a simple open source bike computer similar to the mo
 I will post a table with all the hardware and the prices for each component in the next few days
 ## Required Packages
 
-'''
+'''txt
 smbus2
 bme280
 adafruit\_gps
