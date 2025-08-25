@@ -34,9 +34,9 @@ gps_mod.send_command(b'PMTK220,1000')  # 1 Hz update rate
 #initialize button
 GPIO.setwarnings(False)
 GPIO.setmode(GPIO.BCM)
-SCREEN_PIN = 21
+SCREEN_PIN = 16
 GPIO.setup(SCREEN_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-ACTIVITY_PIN = 17
+ACTIVITY_PIN = 6
 GPIO.setup(ACTIVITY_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
 def environment():
@@ -95,18 +95,18 @@ log_interval = 1.0
 
 
 while True:
-    if GPIO.input(21) == GPIO.LOW:
+    if GPIO.input(16) == GPIO.LOW:
         screen_index = (screen_index + 1) % screen_count
         time.sleep(0.3)
 
-        while GPIO.input(21) == GPIO.LOW:
+        while GPIO.input(16) == GPIO.LOW:
             time.sleep(0.01)
 
-    if GPIO.input(17) == GPIO.LOW:
+    if GPIO.input(6) == GPIO.LOW:
         press_start = time.time()
         time.sleep(0.3)
 
-        while GPIO.input(17) == GPIO.LOW:
+        while GPIO.input(6) == GPIO.LOW:
             time.sleep(0.01)
 
         press_duration = time.time() - press_start
