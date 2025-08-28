@@ -6,6 +6,9 @@ __pycache__/
 # C extensions
 *.so
 
+# nohup
+nohup.out
+
 #gpx_data
 gpx_logs/
 

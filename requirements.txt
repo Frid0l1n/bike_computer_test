@@ -1,5 +1,6 @@
 smbus2
 bme280
+icm20948-python
 adafruit_gps
 luma.oled
 RPi.GPIO
