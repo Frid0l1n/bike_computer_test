@@ -9,6 +9,7 @@ import RPi.GPIO as GPIO
 
 # other stuff
 import gpxpy
+import xml.etree.ElementTree as ET
 import time
 import serial
 import os
@@ -66,7 +67,6 @@ def read_accel():
     return ax, ay, az
 
 initialize_icm()
-
 
 # initialize gps
 uart = serial.Serial("/dev/serial0", baudrate=9600, timeout=30)
@@ -138,6 +138,35 @@ def display_accelerometer(ax, ay, az):
 
     display.display(image)
 
+
+def log_activity(activity):
+    name = datetime.now() 
+    clean_name = name.strftime("%Y-%m-%d_%H-%M")
+    
+    gpx = ET.Element("gpx", version="1.1", creatpor="MyTest")
+    trk = ET.SubElement(gpx, "trk")
+    trkseg = ET.SubElement(trk, "trkseg")
+
+
+    while activity:
+         gps_mod.update()
+         lat = gps_mod.latitude
+         long = gps_mod.longitude
+         alt = gps_mod.altitude_m
+
+         trkpt = ET.SubElement(trkseg, "trkpt", lat=str(lat), lon=str(long))
+         ele = ET.SubElement(trkpt, "ele")
+         ele.text = str(alt)
+
+         time = ET.SubElement(trkpt, "time")
+         time.text = datetime.datetime.now().isoformat()
+
+    tree = ET.ElementTree(gpx)
+
+    with open(f"{clean_name}.gpx", "wb") as f:
+        tree.write(f)
+
+
 # state vars
 screen_index = 0
 screen_count = 5
@@ -147,6 +176,7 @@ last_log_time = 0
 log_interval = 1.0
 
 while True:
+
     # screen switch button
     if GPIO.input(SCREEN_PIN) == GPIO.LOW:
         screen_index = (screen_index + 1) % screen_count
@@ -177,13 +207,9 @@ while True:
         else:
             # Short press → start activity
             if not activity:
-                activity = True
+                activity = True 
                 activity_start = datetime.now()
-                gpx = gpxpy.gpx.GPX()
-                gpx_track = gpxpy.gpx.GPXTrack()
-                gpx.tracks.append(gpx_track)
-                gpx_segment = gpxpy.gpx.GPXTrackSegment()
-                gpx_track.segments.append(gpx_segment)
+                log_activity(activity)
                 print("Activity started.")
             else:
                 print("Activity already running.")
@@ -216,4 +242,3 @@ while True:
         display_activity()
 
     time.sleep(0.1)
-
