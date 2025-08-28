@@ -37,6 +37,7 @@ Make sure to install the following Python packages:
 
 ```
 smbus2
+icm20948-python
 bme280
 adafruit_gps
 luma.oled
