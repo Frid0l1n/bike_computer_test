@@ -1,21 +1,21 @@
 import smbus2
 import bme280
 import pynmea2
+import datetime
+import time
 from luma.core.interface.serial import i2c
 from luma.oled.device import ssd1306
 from PIL import Image, ImageDraw, ImageFont
 import RPi.GPIO as GPIO
 import gpxpy
 import gpxpy.gpx
-import time
 import serial
 import os
-from datetime import datetime
-from collections import deque
+import csv
 
 # Display initialization
-ser = i2c(port=1, address=0x3C)
-display = ssd1306(ser)
+serial_interface = i2c(port=1, address=0x3C)
+display = ssd1306(serial_interface)
 font = ImageFont.load_default()
 
 # BME280 initialization
@@ -33,8 +33,10 @@ REG_ACCEL_XOUT_H = 0x2D
 REG_ACCEL_CONFIG = 0x14
 bus_icm = smbus2.SMBus(port_icm)
 
+
 def switch_bank(bank):
     bus_icm.write_byte_data(address_icm, REG_BANK_SEL, bank << 4)
+
 
 def initialize_icm():
     switch_bank(0)
@@ -45,26 +47,24 @@ def initialize_icm():
     time.sleep(0.1)
     switch_bank(0)
 
+
 def read_accel():
     data = bus_icm.read_i2c_block_data(address_icm, REG_ACCEL_XOUT_H, 6)
     x = (data[0] << 8) | data[1]
     y = (data[2] << 8) | data[3]
     z = (data[4] << 8) | data[5]
-    
+
     x = x - 65536 if x > 32767 else x
     y = y - 65536 if y > 32767 else y
     z = z - 65536 if z > 32767 else z
 
-    ax = x / 16384.0
-    ay = y / 16384.0
-    az = z / 16384.0
-    
-    return ax, ay, az
+    return x / 16384.0, y / 16384.0, z / 16384.0
+
 
 initialize_icm()
 
 # GPS initialization
-uart = serial.Serial("/dev/serial0", baudrate=9600, timeout=1)
+uart = serial.Serial("/dev/serial0", baudrate=9600, timeout=0.5)
 
 # GPIO setup
 GPIO.setwarnings(False)
@@ -74,7 +74,7 @@ ACTIVITY_PIN = 6
 GPIO.setup(SCREEN_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 GPIO.setup(ACTIVITY_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
-# GPS data class
+
 class GPSData:
     def __init__(self):
         self.latitude = None
@@ -85,106 +85,183 @@ class GPSData:
         self.has_fix = False
         self.satellites = 0
         self.timestamp = None
-        
+
+    def nmea_to_decimal(self, raw_val, direction):
+        """Convert NMEA latitude/longitude to decimal degrees."""
+        if not raw_val or not direction:
+            return None
+        try:
+            raw_val = float(raw_val)
+            degrees = int(raw_val // 100)
+            minutes = raw_val - degrees * 100
+            decimal = degrees + minutes / 60
+            if direction in ['S', 'W']:
+                decimal *= -1
+            return decimal
+        except ValueError:
+            return None
+
     def update_from_nmea(self, sentence):
         try:
             msg = pynmea2.parse(sentence)
-            
             if isinstance(msg, pynmea2.types.talker.GGA):
-                self.latitude = msg.latitude
-                self.longitude = msg.longitude
-                self.altitude = msg.altitude if msg.altitude else 0
-                self.has_fix = msg.gps_qual > 0
-                self.satellites = msg.num_sats if msg.num_sats else 0
-                
+                self.latitude = self.nmea_to_decimal(msg.lat, msg.lat_dir)
+                self.longitude = self.nmea_to_decimal(msg.lon, msg.lon_dir)
+                self.altitude = float(msg.altitude) if msg.altitude else 0.0
+                self.has_fix = int(msg.gps_qual) > 0 if msg.gps_qual else False
+                self.satellites = int(msg.num_sats) if msg.num_sats else 0
+
             elif isinstance(msg, pynmea2.types.talker.RMC):
-                if msg.latitude and msg.longitude:
-                    self.latitude = msg.latitude
-                    self.longitude = msg.longitude
-                if msg.spd_over_grnd:
-                    self.speed_knots = float(msg.spd_over_grnd)
-                    self.speed_kmh = self.speed_knots * 1.852
-                self.timestamp = msg.timestamp
-                
-        except (pynmea2.ParseError, AttributeError):
+                if msg.lat and msg.lon:
+                    self.latitude = self.nmea_to_decimal(msg.lat, msg.lat_dir)
+                    self.longitude = self.nmea_to_decimal(msg.lon, msg.lon_dir)
+                    if msg.spd_over_grnd:
+                        self.speed_knots = float(msg.spd_over_grnd)
+                        self.speed_kmh = self.speed_knots * 1.852
+                        if isinstance(msg.timestamp, datetime.time):
+                            self.timestamp = datetime.datetime.combine(datetime.datetime.today(), msg.timestamp)
+        except (pynmea2.ParseError, AttributeError, ValueError):
             pass
+
 
 gps_data = GPSData()
 
-# Activity tracking class
+
 class ActivityTracker:
     def __init__(self):
         self.active = False
         self.start_time = None
         self.gpx = None
         self.gpx_segment = None
-        self.speed_buffer = deque(maxlen=30)  # Last 30 speed readings
-        self.avg_speed = 0.0
-        self.max_speed = 0.0
+        self.csv_file = None
+        self.csv_writer = None
+        self.display_avg_speed = 0.0
+        self.display_max_speed = 0.0
         self.point_count = 0
-        
+        self.last_avg_update = 0
+
     def start(self):
         self.active = True
-        self.start_time = datetime.now()
+        self.start_time = datetime.datetime.now()
+
+        # Initialize GPX
         self.gpx = gpxpy.gpx.GPX()
         self.gpx.creator = "RPi Activity Tracker"
         gpx_track = gpxpy.gpx.GPXTrack()
         self.gpx.tracks.append(gpx_track)
         self.gpx_segment = gpxpy.gpx.GPXTrackSegment()
         gpx_track.segments.append(self.gpx_segment)
-        self.speed_buffer.clear()
-        self.avg_speed = 0.0
-        self.max_speed = 0.0
+
+        # Initialize CSV
+        os.makedirs("activity_data", exist_ok=True)
+        csv_filename = f"activity_data/speeds_{self.start_time.strftime('%Y%m%d_%H%M%S')}.csv"
+        self.csv_file = open(csv_filename, 'w', newline='', buffering=8192)
+        self.csv_writer = csv.writer(self.csv_file)
+        self.csv_writer.writerow(['timestamp', 'speed_kmh'])
+
+        # Reset stats
+        self.display_avg_speed = 0.0
+        self.display_max_speed = 0.0
         self.point_count = 0
-        print("Activity started")
-        
+        self.last_avg_update = time.time()
+
+        print(f"Activity started. CSV: {csv_filename}")
+
     def stop(self):
         if not self.active:
             return None
-            
+
         self.active = False
+
+        # Calculate final statistics
+        csv_filename = self.csv_file.name
+        self.csv_file.close()
+        final_avg, final_max = self._calculate_stats_from_csv(csv_filename)
+
+        # Save GPX
         os.makedirs("gpx_logs", exist_ok=True)
-        filename = "gpx_logs/activity_{}.gpx".format(
-            self.start_time.strftime("%Y%m%d_%H%M%S")
-        )
-        
-        with open(filename, "w") as f:
+        gpx_filename = f"gpx_logs/activity_{self.start_time.strftime('%Y%m%d_%H%M%S')}.gpx"
+        with open(gpx_filename, "w") as f:
             f.write(self.gpx.to_xml())
-        
-        print(f"Activity stopped. Saved to {filename}")
+
+        print(f"Activity stopped. Saved to {gpx_filename}")
         print(f"Points logged: {self.point_count}")
-        print(f"Average speed: {self.avg_speed:.2f} km/h")
-        print(f"Max speed: {self.max_speed:.2f} km/h")
-        return filename
-        
+        print(f"Average speed: {final_avg:.2f} km/h")
+        print(f"Max speed: {final_max:.2f} km/h")
+
+        return gpx_filename
+
+    def _calculate_stats_from_csv(self, csv_filename):
+        try:
+            total_speed = 0.0
+            count = 0
+            max_speed = 0.0
+
+            with open(csv_filename, 'r') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    speed = float(row['speed_kmh'])
+                    if speed > 0:
+                        total_speed += speed
+                        count += 1
+                        max_speed = max(max_speed, speed)
+
+            avg_speed = total_speed / count if count > 0 else 0.0
+            return avg_speed, max_speed
+        except Exception as e:
+            print(f"Error calculating stats: {e}")
+            return 0.0, 0.0
+
     def add_point(self, lat, lon, elev, speed_kmh=None):
         if not self.active:
             return
-            
+
         point = gpxpy.gpx.GPXTrackPoint(
             latitude=lat,
             longitude=lon,
             elevation=elev,
-            time=datetime.utcnow()
+            time=datetime.datetime.utcnow()
         )
         self.gpx_segment.points.append(point)
         self.point_count += 1
-        
-        # Update speed statistics
-        if speed_kmh is not None and speed_kmh > 0:
-            self.speed_buffer.append(speed_kmh)
-            self.avg_speed = sum(self.speed_buffer) / len(self.speed_buffer)
-            self.max_speed = max(self.max_speed, speed_kmh)
-    
+
+        if speed_kmh and speed_kmh > 0:
+            self.csv_writer.writerow([datetime.datetime.now().isoformat(), speed_kmh])
+            if speed_kmh > self.display_max_speed:
+                self.display_max_speed = speed_kmh
+
+    def update_display_stats(self):
+        if not self.active:
+            return
+
+        now = time.time()
+        if now - self.last_avg_update < 10.0:
+            return
+
+        self.last_avg_update = now
+        self.csv_file.flush()
+
+        try:
+            with open(self.csv_file.name, 'r') as f:
+                reader = csv.DictReader(f)
+                speeds = [float(row['speed_kmh']) for row in reader if float(row['speed_kmh']) > 0]
+                recent_speeds = speeds[-30:] if len(speeds) > 30 else speeds
+                if recent_speeds:
+                    self.display_avg_speed = sum(recent_speeds) / len(recent_speeds)
+        except Exception:
+            pass
+
     def get_duration(self):
         if not self.active or not self.start_time:
             return "00:00:00"
-        delta = datetime.now() - self.start_time
+        delta = datetime.datetime.now() - self.start_time
         hours, remainder = divmod(int(delta.total_seconds()), 3600)
         minutes, seconds = divmod(remainder, 60)
         return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
+
 activity_tracker = ActivityTracker()
+
 
 # Display functions
 def environment():
@@ -196,13 +273,15 @@ def environment():
     draw.text((0, 32), f"Hum: {data.humidity:.1f}%", font=font, fill=255)
     display.display(image)
 
+
 def display_time():
     image = Image.new("1", display.size)
     draw = ImageDraw.Draw(image)
-    now = datetime.now()
+    now = datetime.datetime.now()
     draw.text((0, 0), now.strftime("%Y-%m-%d"), font=font, fill=255)
     draw.text((0, 16), now.strftime("%H:%M:%S"), font=font, fill=255)
     display.display(image)
+
 
 def display_gps():
     image = Image.new("1", display.size)
@@ -220,20 +299,22 @@ def display_gps():
 
     display.display(image)
 
+
 def display_activity():
     image = Image.new("1", display.size)
     draw = ImageDraw.Draw(image)
 
     if not activity_tracker.active:
         draw.text((0, 0), "No activity", font=font, fill=255)
-        draw.text((0, 16), "Short press: START", font=font, fill=255)
+        draw.text((0, 16), "Press to START", font=font, fill=255)
     else:
         draw.text((0, 0), f"Time: {activity_tracker.get_duration()}", font=font, fill=255)
-        draw.text((0, 16), f"Avg: {activity_tracker.avg_speed:.1f}km/h", font=font, fill=255)
-        draw.text((0, 32), f"Max: {activity_tracker.max_speed:.1f}km/h", font=font, fill=255)
+        draw.text((0, 16), f"Avg: {activity_tracker.display_avg_speed:.1f}km/h", font=font, fill=255)
+        draw.text((0, 32), f"Max: {activity_tracker.display_max_speed:.1f}km/h", font=font, fill=255)
         draw.text((0, 48), f"Pts: {activity_tracker.point_count}", font=font, fill=255)
 
     display.display(image)
+
 
 def display_accelerometer(ax, ay, az):
     image = Image.new("1", display.size)
@@ -243,76 +324,107 @@ def display_accelerometer(ax, ay, az):
     draw.text((0, 32), f"Z: {az:.2f}g", font=font, fill=255)
     display.display(image)
 
+
 # State variables
 screen_index = 0
 screen_count = 5
 last_log_time = 0
-log_interval = 2.0  # Log every 2 seconds
+last_display_update = 0
+last_accel_read = 0
+last_button_check = 0
+
+# Performance tuning intervals
+LOG_INTERVAL = 3.0
+DISPLAY_INTERVAL = 1.0
+ACCEL_INTERVAL = 1.0
+BUTTON_INTERVAL = 0.2
+GPS_READ_INTERVAL = 0.5
+
+ax = ay = az = 0.0
 
 print("Activity tracker started. Use buttons to navigate.")
 
 try:
+    last_gps_read = 0
+
     while True:
+        now = time.time()
+
         # Read GPS data
-        if uart.in_waiting > 0:
-            try:
-                line = uart.readline().decode('ascii', errors='replace').strip()
-                gps_data.update_from_nmea(line)
-            except (UnicodeDecodeError, serial.SerialException):
-                pass
+        if now - last_gps_read >= GPS_READ_INTERVAL:
+            if uart.in_waiting > 0:
+                try:
+                    line = uart.readline().decode('ascii', errors='replace').strip()
+                    if line:
+                        gps_data.update_from_nmea(line)
+                except (UnicodeDecodeError, serial.SerialException):
+                    pass
+            last_gps_read = now
 
-        # Screen switch button
-        if GPIO.input(SCREEN_PIN) == GPIO.LOW:
-            screen_index = (screen_index + 1) % screen_count
-            time.sleep(0.3)
-            while GPIO.input(SCREEN_PIN) == GPIO.LOW:
-                time.sleep(0.01)
+        # Check buttons
+        if now - last_button_check >= BUTTON_INTERVAL:
+            if GPIO.input(SCREEN_PIN) == GPIO.LOW:
+                screen_index = (screen_index + 1) % screen_count
+                print(f"Screen changed to: {screen_index}")
+                time.sleep(0.3)
+                while GPIO.input(SCREEN_PIN) == GPIO.LOW:
+                    time.sleep(0.05)
 
-        # Activity button
-        if GPIO.input(ACTIVITY_PIN) == GPIO.LOW:
-            press_start = time.time()
-            time.sleep(0.3)
-            while GPIO.input(ACTIVITY_PIN) == GPIO.LOW:
-                time.sleep(0.01)
+            if GPIO.input(ACTIVITY_PIN) == GPIO.LOW:
+                time.sleep(0.3)
+                while GPIO.input(ACTIVITY_PIN) == GPIO.LOW:
+                    time.sleep(0.05)
 
-            press_duration = time.time() - press_start
+                if activity_tracker.active:
+                    activity_tracker.stop()
+                else:
+                    if gps_data.has_fix:
+                        activity_tracker.start()
+                    else:
+                        print("Cannot start: No GPS fix")
 
-            if press_duration > 2:
-                # Long press → stop activity
-                activity_tracker.stop()
-            else:
-                # Short press → start activity
-                if not activity_tracker.active:
-                    activity_tracker.start()
+            last_button_check = now
 
-        # Log GPS points if activity is running
-        if activity_tracker.active and gps_data.has_fix:
-            now = time.time()
-            if now - last_log_time >= log_interval:
+        # Log GPS points
+        if activity_tracker.active and gps_data.has_fix and now - last_log_time >= LOG_INTERVAL:
+            if gps_data.latitude is not None and gps_data.longitude is not None:
                 activity_tracker.add_point(
                     gps_data.latitude,
                     gps_data.longitude,
                     gps_data.altitude if gps_data.altitude else 0,
                     gps_data.speed_kmh
                 )
-                last_log_time = now
+            last_log_time = now
+
+        if activity_tracker.active:
+            activity_tracker.update_display_stats()
 
         # Read accelerometer
-        ax, ay, az = read_accel()
+        if now - last_accel_read >= ACCEL_INTERVAL:
+            try:
+                ax, ay, az = read_accel()
+            except Exception as e:
+                print(f"Accel error: {e}")
+            last_accel_read = now
 
-        # Display current screen
-        if screen_index == 0:
-            display_activity()
-        elif screen_index == 1:
-            environment()
-        elif screen_index == 2:
-            display_time()
-        elif screen_index == 3:
-            display_gps()
-        elif screen_index == 4:
-            display_accelerometer(ax, ay, az)
+        # Display update
+        if now - last_display_update >= DISPLAY_INTERVAL:
+            try:
+                if screen_index == 0:
+                    display_activity()
+                elif screen_index == 1:
+                    environment()
+                elif screen_index == 2:
+                    display_time()
+                elif screen_index == 3:
+                    display_gps()
+                elif screen_index == 4:
+                    display_accelerometer(ax, ay, az)
+            except Exception as e:
+                print(f"Display error: {e}")
+            last_display_update = now
 
-        time.sleep(0.1)
+        time.sleep(0.05)
 
 except KeyboardInterrupt:
     print("\nShutting down...")
@@ -320,3 +432,6 @@ except KeyboardInterrupt:
         activity_tracker.stop()
     GPIO.cleanup()
     uart.close()
+    bus_bme.close()
+    bus_icm.close()
+
