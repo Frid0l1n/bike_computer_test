@@ -12,7 +12,6 @@ import gpxpy.gpx
 import serial
 import os
 import csv
-
 # Display initialization
 serial_interface = i2c(port=1, address=0x3C)
 display = ssd1306(serial_interface)
@@ -342,8 +341,6 @@ GPS_READ_INTERVAL = 0.5
 
 ax = ay = az = 0.0
 
-print("Activity tracker started. Use buttons to navigate.")
-
 try:
     last_gps_read = 0
 
@@ -365,7 +362,6 @@ try:
         if now - last_button_check >= BUTTON_INTERVAL:
             if GPIO.input(SCREEN_PIN) == GPIO.LOW:
                 screen_index = (screen_index + 1) % screen_count
-                print(f"Screen changed to: {screen_index}")
                 time.sleep(0.3)
                 while GPIO.input(SCREEN_PIN) == GPIO.LOW:
                     time.sleep(0.05)
@@ -380,10 +376,8 @@ try:
                 else:
                     if gps_data.has_fix:
                         activity_tracker.start()
-                    else:
-                        print("Cannot start: No GPS fix")
-
-            last_button_check = now
+                    else: 
+                        last_button_check = now
 
         # Log GPS points
         if activity_tracker.active and gps_data.has_fix and now - last_log_time >= LOG_INTERVAL:
@@ -404,8 +398,7 @@ try:
             try:
                 ax, ay, az = read_accel()
             except Exception as e:
-                print(f"Accel error: {e}")
-            last_accel_read = now
+                last_accel_read = now
 
         # Display update
         if now - last_display_update >= DISPLAY_INTERVAL:
@@ -421,17 +414,14 @@ try:
                 elif screen_index == 4:
                     display_accelerometer(ax, ay, az)
             except Exception as e:
-                print(f"Display error: {e}")
-            last_display_update = now
+                last_display_update = now
 
         time.sleep(0.05)
 
 except KeyboardInterrupt:
-    print("\nShutting down...")
     if activity_tracker.active:
         activity_tracker.stop()
     GPIO.cleanup()
     uart.close()
     bus_bme.close()
     bus_icm.close()
-
