@@ -349,14 +349,19 @@ try:
 
         # Read GPS data
         if now - last_gps_read >= GPS_READ_INTERVAL:
-            if uart.in_waiting > 0:
-                try:
-                    line = uart.readline().decode('ascii', errors='replace').strip()
-                    if line:
-                        gps_data.update_from_nmea(line)
-                except (UnicodeDecodeError, serial.SerialException):
-                    pass
-            last_gps_read = now
+            try:
+
+                if uart.in_waiting > 0:
+                    try:
+                        line = uart.readline().decode('ascii', errors='replace').strip()
+                        if line:
+                            gps_data.update_from_nmea(line)
+                    except (UnicodeDecodeError, serial.SerialException):
+                        pass
+                    last_gps_read = now
+            except OSError:
+                uart.reset_input_buffer()
+                continue
 
         # Check buttons
         if now - last_button_check >= BUTTON_INTERVAL:
