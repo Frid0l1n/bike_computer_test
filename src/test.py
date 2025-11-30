@@ -12,7 +12,6 @@ import gpxpy.gpx
 import serial
 import os
 import csv
-
 # Display initialization
 serial_interface = i2c(port=1, address=0x3C)
 display = ssd1306(serial_interface)
@@ -63,35 +62,8 @@ def read_accel():
 
 initialize_icm()
 
-
-# UART Helper Functions
-def init_uart(port="/dev/serial0", baudrate=9600, timeout=0.5):
-    """Initialize UART connection with error handling"""
-    try:
-        uart = serial.Serial(port, baudrate=baudrate, timeout=timeout)
-        uart.reset_input_buffer()
-        print(f"UART initialized on {port}")
-        return uart
-    except Exception as e:
-        print(f"Failed to initialize UART: {e}")
-        return None
-
-
-def safe_uart_close(uart):
-    """Safely close UART connection"""
-    try:
-        if uart and uart.is_open:
-            uart.close()
-    except:
-        pass
-
-
 # GPS initialization
-uart = init_uart()
-uart_error_count = 0
-MAX_UART_ERRORS = 3
-last_uart_reconnect = 0
-UART_RECONNECT_DELAY = 5.0
+uart = serial.Serial("/dev/serial0", baudrate=9600, timeout=0.5)
 
 # GPIO setup
 GPIO.setwarnings(False)
@@ -361,11 +333,11 @@ last_accel_read = 0
 last_button_check = 0
 
 # Performance tuning intervals
-LOG_INTERVAL = 1.0
+LOG_INTERVAL = 3.0
 DISPLAY_INTERVAL = 1.0
 ACCEL_INTERVAL = 1.0
-BUTTON_INTERVAL = 0.1
-GPS_READ_INTERVAL = 1.0
+BUTTON_INTERVAL = 0.2
+GPS_READ_INTERVAL = 0.5
 
 ax = ay = az = 0.0
 
@@ -375,58 +347,32 @@ try:
     while True:
         now = time.time()
 
-        # Reconnect UART if needed
-        if uart is None or not uart.is_open:
-            if now - last_uart_reconnect >= UART_RECONNECT_DELAY:
-                print("Attempting to reconnect UART...")
-                safe_uart_close(uart)
-                uart = init_uart()
-                uart_error_count = 0
-                last_uart_reconnect = now
-
         # Read GPS data
-        if uart and uart.is_open and now - last_gps_read >= GPS_READ_INTERVAL:
+        if now - last_gps_read >= GPS_READ_INTERVAL:
             try:
+
                 if uart.in_waiting > 0:
-                    line = uart.readline().decode('ascii', errors='replace').strip()
-                    if line:
-                        gps_data.update_from_nmea(line)
-                        uart_error_count = 0  # Reset error count on success
-                last_gps_read = now
-
-            except (OSError, IOError, serial.SerialException) as e:
-                uart_error_count += 1
-                print(f"UART error ({uart_error_count}/{MAX_UART_ERRORS}): {e}")
-
-                # Try to recover
-                try:
-                    uart.reset_input_buffer()
-                except:
-                    pass
-
-                # If too many errors, force reconnection
-                if uart_error_count >= MAX_UART_ERRORS:
-                    print("Too many UART errors, closing connection for reconnect...")
-                    safe_uart_close(uart)
-                    uart = None
-                    last_uart_reconnect = now
-
+                    try:
+                        line = uart.readline().decode('ascii', errors='replace').strip()
+                        if line:
+                            gps_data.update_from_nmea(line)
+                    except (UnicodeDecodeError, serial.SerialException):
+                        pass
+                    last_gps_read = now
+            except OSError:
+                uart.reset_input_buffer()
                 continue
-
-            except (UnicodeDecodeError, Exception):
-                # Non-critical errors, just skip this read
-                pass
 
         # Check buttons
         if now - last_button_check >= BUTTON_INTERVAL:
             if GPIO.input(SCREEN_PIN) == GPIO.LOW:
                 screen_index = (screen_index + 1) % screen_count
-                time.sleep(0.1)
+                time.sleep(0.3)
                 while GPIO.input(SCREEN_PIN) == GPIO.LOW:
                     time.sleep(0.05)
 
             if GPIO.input(ACTIVITY_PIN) == GPIO.LOW:
-                time.sleep(0.1)
+                time.sleep(0.3)
                 while GPIO.input(ACTIVITY_PIN) == GPIO.LOW:
                     time.sleep(0.05)
 
@@ -435,8 +381,8 @@ try:
                 else:
                     if gps_data.has_fix:
                         activity_tracker.start()
-
-            last_button_check = now
+                    else: 
+                        last_button_check = now
 
         # Log GPS points
         if activity_tracker.active and gps_data.has_fix and now - last_log_time >= LOG_INTERVAL:
@@ -457,8 +403,7 @@ try:
             try:
                 ax, ay, az = read_accel()
             except Exception as e:
-                pass
-            last_accel_read = now
+                last_accel_read = now
 
         # Display update
         if now - last_display_update >= DISPLAY_INTERVAL:
@@ -473,18 +418,15 @@ try:
                     display_gps()
                 elif screen_index == 4:
                     display_accelerometer(ax, ay, az)
-                last_display_update = now
             except Exception as e:
-                print(f"Display error: {e}")
+                last_display_update = now
 
         time.sleep(0.05)
 
 except KeyboardInterrupt:
-    print("\nShutting down...")
-finally:
     if activity_tracker.active:
         activity_tracker.stop()
-    safe_uart_close(uart)
     GPIO.cleanup()
+    uart.close()
     bus_bme.close()
     bus_icm.close()

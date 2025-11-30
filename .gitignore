@@ -11,6 +11,8 @@ nohup.out
 
 #gpx_data
 gpx_logs/
+src/gpx_logs/
+src/activity_data
 
 # Distribution / packaging
 .Python
